@@ -45,6 +45,10 @@ export default function App() {
     setCurrentScreen('dashboard');
   };
 
+  const handleMealDeleted = (mealId: string) => {
+    setLoggedMeals((currentMeals) => currentMeals.filter((meal) => meal.id !== mealId));
+  };
+
   const handleProfileSaved = (nextProfile: UserProfile) => {
     setProfile(nextProfile);
     setCurrentScreen('dashboard');
@@ -66,6 +70,7 @@ export default function App() {
             nutritionTargets={nutritionTargets}
             onLogMeal={() => setCurrentScreen('logs')}
             onEditProfile={() => setCurrentScreen('onboarding')}
+            onDeleteMeal={handleMealDeleted}
           />
         );
       case 'logs':
@@ -80,6 +85,7 @@ export default function App() {
             nutritionTargets={nutritionTargets}
             onLogMeal={() => setCurrentScreen('logs')}
             onEditProfile={() => setCurrentScreen('onboarding')}
+            onDeleteMeal={handleMealDeleted}
           />
         );
     }

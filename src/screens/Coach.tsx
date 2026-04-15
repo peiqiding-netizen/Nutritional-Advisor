@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { motion } from 'motion/react';
 import { BrainCircuit, LoaderCircle, AlertCircle, RefreshCw } from 'lucide-react';
 import { getDailyCoachFeedback, type DailyCoachFeedback } from '../lib/coach';
@@ -18,7 +19,7 @@ interface CoachProps {
 }
 
 const FALLBACK_FEEDBACK: DailyCoachFeedback = {
-  advice: 'Log a meal to unlock today’s review.',
+  advice: 'Log a meal to unlock today\'s review.',
   generated_at: new Date().toISOString(),
   meal_count: 0,
 };
@@ -32,13 +33,6 @@ function formatDateTime(value: string) {
   });
 }
 
-function splitAdvice(advice: string) {
-  return advice
-    .split(/\n{2,}/)
-    .map((section) => section.trim())
-    .filter(Boolean);
-}
-
 export default function Coach({ meals, profile, nutritionTargets }: CoachProps) {
   const [feedback, setFeedback] = useState<DailyCoachFeedback>(FALLBACK_FEEDBACK);
   const [isLoading, setIsLoading] = useState(false);
@@ -46,9 +40,8 @@ export default function Coach({ meals, profile, nutritionTargets }: CoachProps) 
   const totals = useMemo(() => sumMeals(meals), [meals]);
 
   const loadFeedback = async () => {
-    if (meals.length === 0) {
-      setFeedback(FALLBACK_FEEDBACK);
-      setErrorMessage(null);
+    if (profile.nutritionPlanPreference === 'intake-critique' && meals.length < 3) {
+      setErrorMessage('Please log at least three meals before requesting an Intake Critique.');
       return;
     }
 
@@ -73,8 +66,6 @@ export default function Coach({ meals, profile, nutritionTargets }: CoachProps) 
   useEffect(() => {
     void loadFeedback();
   }, [meals, profile, nutritionTargets]);
-
-  const adviceSections = splitAdvice(feedback.advice);
 
   return (
     <motion.div
@@ -119,12 +110,10 @@ export default function Coach({ meals, profile, nutritionTargets }: CoachProps) 
             </div>
             <div>
               <h3 className="text-3xl font-extrabold tracking-tight text-zinc-900">Nutrition Review</h3>
-              <div className="mt-4 space-y-4 max-w-3xl">
-                {adviceSections.map((section, index) => (
-                  <p key={index} className="text-zinc-600 leading-relaxed whitespace-pre-wrap">
-                    {section}
-                  </p>
-                ))}
+              <div className="mt-4 max-w-3xl prose prose-zinc prose-sm max-w-none overflow-y-auto" style={{ maxHeight: '600px' }}>
+                <ReactMarkdown>
+                  {feedback.advice}
+                </ReactMarkdown>
               </div>
             </div>
           </div>

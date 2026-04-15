@@ -19,6 +19,7 @@ interface DashboardProps {
   nutritionTargets: NutritionTargets;
   onLogMeal: () => void;
   onEditProfile: () => void;
+  onDeleteMeal: (mealId: string) => void;
 }
 
 function formatPercent(current: number, target: number) {
@@ -41,6 +42,7 @@ export default function Dashboard({
   nutritionTargets,
   onLogMeal,
   onEditProfile,
+  onDeleteMeal,
 }: DashboardProps) {
   const totals = sumMeals(meals);
   const remainingCalories = Math.max(0, nutritionTargets.targetCalories - Math.round(totals.calories));
@@ -201,6 +203,14 @@ export default function Dashboard({
                     <Stat label="Carbs" value={`${Math.round(meal.carbs_g)}g`} />
                     <Stat label="Fat" value={`${Math.round(meal.fat_g)}g`} />
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteMeal(meal.id)}
+                    className="text-red-400 hover:text-red-600 transition-colors p-2 rounded-xl hover:bg-red-50"
+                    aria-label="Delete meal"
+                  >
+                    ✕
+                  </button>
                 </div>
               ))}
             </div>

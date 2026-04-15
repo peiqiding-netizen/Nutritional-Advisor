@@ -329,11 +329,34 @@ app.post('/api/vision/analyze', async (request, response) => {
       return;
     }
 
-    const visionResult = await callPythonVisionService({
-      imageDataUrl,
-      ingredientsText: body.ingredientsText,
-      portionText: body.portionText,
+    const ingredients = body.ingredientsText?.trim() || '';
+    const portion = body.portionText?.trim() || '';
+
+    const userText = [
+      'Analyse this meal photo and return nutritional estimates.',
+      ingredients && `Ingredients: ${ingredients}`,
+      portion && `Portion size: ${portion}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const visionResult = await callAi<PythonVisionResponseBody>({
+      model: 'google/gemini-2.0-flash-lite-001',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: imageDataUrl } },
+            { type: 'text', text: userText },
+          ],
+        },
+      ],
+      schemaName: 'vision_result',
+      schema: visionSchema,
+      temperature: 0.2,
+      maxTokens: 700,
     });
+
 
     response.json({
       meal_name: visionResult.meal_name?.trim() || 'Logged meal',
@@ -362,9 +385,13 @@ function inferUserGroup(profileSummary: string) {
   const diagnosedConditions = extractProfileField(profileSummary, 'Diagnosed conditions').toLowerCase();
 
   const hasDiabetes = diagnosedConditions.includes('diabetes');
-  const hasDepression = diagnosedConditions.includes('depression');
-  const hasSleep = diagnosedConditions.includes('sleep difficulties');
+  const hasDepression = diagnosedConditions.includes('depression') || diagnosedConditions.includes('low mood');
+  const hasSleep = diagnosedConditions.includes('sleep');
+  const hasNone = diagnosedConditions.includes('none of the above') || diagnosedConditions.includes('none reported');
 
+  if (hasNone) {
+    return 'Adult/Standard Health';
+  }
   if (hasDiabetes && hasDepression) {
     return 'Adult/Diabetes+Depression';
   }
@@ -382,39 +409,12 @@ function inferUserGroup(profileSummary: string) {
   if (text.includes('cognitive focus')) {
     return 'Adult/Mental Health Risk';
   }
-  if (text.includes('holistic vitality')) {
-    return 'Adult/Standard Health';
-  }
-  if (text.includes('athletic performance')) {
-    return 'Adult/Standard Health';
-  }
-  if (text.includes('optimize weight')) {
-    return 'Adult/Diabetes Risk';
-  }
   return 'Adult/Standard Health';
 }
 
 function extractProfileField(profileSummary: string, field: string) {
   const match = profileSummary.match(new RegExp(`^${field}:\\s*(.+)$`, 'im'));
   return match?.[1]?.trim() || '';
-}
-
-function buildPlanPreferenceInstruction(nutritionPlanPreference: string) {
-  const text = nutritionPlanPreference.toLowerCase();
-  if (text.includes('1-day meal plan')) {
-    return 'Shape the advice like a 1-day meal plan with clear meal-by-meal guidance.';
-  }
-  if (text.includes('1-week meal plan')) {
-    return 'Shape the advice like a 1-week plan with variation across days.';
-  }
-  if (text.includes('recommended targets')) {
-    return 'Focus on calorie and macro targets only. Do not suggest a full meal plan.';
-  }
-  if (text.includes('intake critique')) {
-    return 'Prioritize critiquing the current intake and recommend specific adjustments.';
-  }
-
-  return 'Tailor the advice to the preferred nutrition plan style when possible.';
 }
 
 function buildReviewPrompt(body: CoachRequestBody, totals: NutritionTotals) {
@@ -425,7 +425,6 @@ function buildReviewPrompt(body: CoachRequestBody, totals: NutritionTotals) {
   const goal = extractProfileField(profileSummary, 'Goal') || 'Maintenance';
   const diagnosedConditions = extractProfileField(profileSummary, 'Diagnosed conditions');
   const nutritionPlanPreference = extractProfileField(profileSummary, 'Nutrition plan type preference');
-  const planPreferenceInstruction = buildPlanPreferenceInstruction(nutritionPlanPreference);
   const userGroup = inferUserGroup(profileSummary);
   const conditions = diagnosedConditions || (
     userGroup.includes('Diabetes')
@@ -445,20 +444,39 @@ function buildReviewPrompt(body: CoachRequestBody, totals: NutritionTotals) {
     })
     .join('\n');
 
+  console.log('=== PROFILE SUMMARY ===', body.profileSummary);
+  console.log('=== DIAGNOSED CONDITIONS ===', diagnosedConditions);
+  console.log('=== USER GROUP ===', userGroup);
+  console.log('=== CONDITIONS ===', conditions);
+
   return [
     `[USER GROUP: ${userGroup}]`,
+    `CRITICAL: This user has been classified as [USER GROUP: ${userGroup}]. You MUST apply all rules for this user group. DO NOT re-evaluate or override this classification.`,
     `Age: ${age || '28'} | Gender: ${extractProfileField(profileSummary, 'Biological sex for BMR math') || 'Unknown'} | Weight: ${weight || 'Unknown'} | Height: ${height || 'Unknown'}`,
-    `Conditions: ${conditions}`,
+    `Diagnosed conditions: ${conditions}. RULE: Because this user has ${conditions}, you MUST use the ${userGroup} system prompt rules. Skip your own safety check — it has already been done.`,
     `Nutrition plan preference: ${nutritionPlanPreference || 'No stated preference'}`,
-    `Plan handling: ${planPreferenceInstruction}`,
+    ...(meals.length > 0 ? [
+      'Current Intake:',
+      `  Total:     ${Math.round(totals.calories)}cal | P:${Math.round(totals.protein)}g | F:${Math.round(totals.fat)}g | C:${Math.round(totals.carbs)}g`,
+      mealLines,
+    ] : []),
     '',
-    'Current Intake:',
-    `  Total:     ${Math.round(totals.calories)}cal | P:${Math.round(totals.protein)}g | F:${Math.round(totals.fat)}g | C:${Math.round(totals.carbs)}g`,
-    mealLines || '  No meals recorded',
-    '',
+    'Note: Always refer to the user as "User" not "Patient" in your response. IMPORTANT: Only apply condition-specific safety rules if conditions are EXPLICITLY listed in the Conditions field above. If Conditions says "None of the above" or "None reported", treat this user as a completely healthy adult with NO medical conditions. Do NOT infer, assume, or mention diabetes, depression, or any other condition. Do NOT reject the request based on inferred conditions. Always refer to the user as "User" not "Patient".',
     `Goal: ${goal}`,
     `Targets:\n${body.goalsSummary || 'Not provided'}`,
-    'Request: Review today’s intake against the targets, account for the diagnosed conditions and user group, and follow the selected nutrition plan style.',
+    meals.length === 0
+      ? `Request: The user has not logged any meals yet. Based on their profile and targets, provide: ${nutritionPlanPreference?.toLowerCase().includes('week') ? 'a 7-day meal plan with daily calorie and macro targets.' :
+        nutritionPlanPreference?.toLowerCase().includes('day') ? 'a detailed 1-day meal plan with calories and macros per meal.' :
+          nutritionPlanPreference?.toLowerCase().includes('target') ? 'recommended daily calorie and macro targets only, no specific meals.' :
+            nutritionPlanPreference?.toLowerCase().includes('critique') ? 'general dietary advice and recommendations based on their profile.' :
+              'a personalised nutrition plan and practical dietary advice.'
+      }`
+      : `Request: Review today's intake against the targets and provide: ${nutritionPlanPreference?.toLowerCase().includes('week') ? 'a 7-day meal plan adjustment.' :
+        nutritionPlanPreference?.toLowerCase().includes('day') ? 'a corrected 1-day meal plan.' :
+          nutritionPlanPreference?.toLowerCase().includes('target') ? 'recommended target adjustments only.' :
+            nutritionPlanPreference?.toLowerCase().includes('critique') ? 'a critique of today\'s intake with specific adjustments.' :
+              'practical diet advice.'
+      }`,
   ].join('\n');
 }
 
@@ -466,15 +484,6 @@ app.post('/api/coach/daily-feedback', async (request, response) => {
   try {
     const body = request.body as CoachRequestBody;
     const meals = Array.isArray(body.meals) ? body.meals : [];
-
-    if (meals.length === 0) {
-      response.json({
-        advice: 'Log a meal to unlock today’s review.',
-        generated_at: new Date().toISOString(),
-        meal_count: 0,
-      } satisfies CoachApiResponseBody);
-      return;
-    }
 
     const totals = meals.reduce<NutritionTotals>(
       (accumulator, meal) => {
